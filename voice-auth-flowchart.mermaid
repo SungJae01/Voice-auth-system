@@ -1,0 +1,70 @@
+flowchart TD
+    %% 메인 프로그램 시작
+    Start([프로그램 시작]) --> Init[모델 및 설정 초기화]
+    Init --> LoadUI[PyQt5 UI 로딩]
+    LoadUI --> ShowUI[앱 화면 표시]
+    ShowUI --> WaitInput[사용자 입력 대기]
+    
+    %% 사용자 선택지
+    WaitInput --> |프로필 생성 버튼| CreateProfile[프로필 생성]
+    WaitInput --> |프로필 삭제 버튼| DeleteProfile[프로필 삭제]
+    WaitInput --> |자동 로그인 버튼| AutoLogin[자동 로그인]
+    WaitInput --> |프로필 버튼 클릭| ProfileLogin[특정 프로필 로그인]
+    
+    %% 프로필 생성 흐름
+    CreateProfile --> GetName{사용자 이름 입력}
+    GetName --> |취소/빈 값| WaitInput
+    GetName --> |이름 입력| CheckExists{프로필 존재?}
+    CheckExists --> |예| ShowDupWarn[중복 경고] --> WaitInput
+    CheckExists --> |아니오| CreateDir[프로필 디렉토리 생성]
+    CreateDir --> RecordLoop[5개 문장 녹음 루프]
+    RecordLoop --> ProcessEmb[음성 임베딩 추출 및 저장]
+    ProcessEmb --> RefreshProfiles[프로필 목록 갱신] --> WaitInput
+    
+    %% 프로필 삭제 흐름
+    DeleteProfile --> SelectProfile{삭제할 프로필 선택}
+    SelectProfile --> |취소| WaitInput
+    SelectProfile --> |선택| ConfirmDelete[프로필 삭제 및 알림]
+    ConfirmDelete --> RefreshProfiles
+    
+    %% 자동 로그인 흐름
+    AutoLogin --> RecordLogin[로그인용 음성 녹음]
+    RecordLogin --> CompareAll[모든 프로필과 유사도 비교]
+    CompareAll --> FindBest{최고 유사도 >= 임계값?}
+    FindBest --> |예| Auth1Success[1차 인증 성공 알림]
+    FindBest --> |아니오| LoginFail[로그인 실패 알림] --> WaitInput
+    Auth1Success --> SecondAuth
+    
+    %% 특정 프로필 로그인 흐름
+    ProfileLogin --> RecordProfileLogin[로그인용 음성 녹음]
+    RecordProfileLogin --> CompareProfile[선택 프로필과 유사도 비교]
+    CompareProfile --> CheckThreshold{유사도 >= 임계값?}
+    CheckThreshold --> |예| Auth1Success2[1차 인증 성공 알림]
+    CheckThreshold --> |아니오| LoginFailProfile[로그인 실패 알림] --> WaitInput
+    Auth1Success2 --> SecondAuth
+    
+    %% 2차 인증 공통 흐름
+    SecondAuth[2차 인증 프로세스]
+    SecondAuth --> RandomSentence[랜덤 문장 선택]
+    RandomSentence --> RecordSecond[2차 인증용 음성 녹음]
+    RecordSecond --> CompareSecond[유사도 계산]
+    CompareSecond --> CheckSecond{유사도 >= 임계값?}
+    CheckSecond --> |예| FinalSuccess[최종 인증 성공] --> WaitInput
+    CheckSecond --> |아니오| SecondFail[2차 인증 실패] --> WaitInput
+    
+    %% 임베딩 생성 서브 프로세스
+    subgraph "음성 임베딩 생성 프로세스"
+        GetWav[오디오 파일 로드] --> ExtractFeatures[특징 추출]
+        ExtractFeatures --> GetEcapa[ECAPA 임베딩 생성]
+        ExtractFeatures --> GetWav2Vec[Wav2Vec 임베딩 생성]
+        ExtractFeatures --> ExtractPitch[음높이 특징 추출]
+        GetWav2Vec --> CombineFeatures[특징 결합]
+        ExtractPitch --> CombineFeatures
+    end
+    
+    %% 앙상블 비교 서브 프로세스
+    subgraph "앙상블 비교 프로세스"
+        LoadModels[저장된 임베딩 로드] --> GetNewEmb[새 오디오 임베딩 추출]
+        GetNewEmb --> CalcSim[유사도 계산]
+        CalcSim --> MixSim[가중치 적용 앙상블]
+    end
