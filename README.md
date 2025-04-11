@@ -103,3 +103,4 @@ python voice_login_main.py
 
 - 📱 라즈베리파이 연동
 - 🧠 GPT 기반 대화형 음성 비서 결합
+- 🔐 보안성 강화
