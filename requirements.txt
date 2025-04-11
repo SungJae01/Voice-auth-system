@@ -1,0 +1,9 @@
+torch
+torchaudio
+transformers
+librosa
+PyQt5
+sounddevice
+soundfile
+scipy
+numpy
