@@ -96,6 +96,7 @@ python voice_login_main.py
 - 👨‍💻 박성재, 심성관 | 정보통신학과 4학년
 - 🎓 졸업 작품으로 진행  
 - ✉️ [miamo0426@gmail.com] (이메일은 수정해 주세요!)
+- 📝 [개발 메모장](https://docs.google.com/document/d/1E5yThehOcIESbAIq4tZq2XeCy7G4xBIGsNDsIICj2ls/edit?usp=sharing) 
 
 ---
 
