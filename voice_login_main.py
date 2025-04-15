@@ -20,11 +20,11 @@ from speechbrain.pretrained import SpeakerRecognition
 
 # ========== 설정 ==========
 SAMPLE_RATE = 16000
-RECORD_SECONDS_PROFILE = 10
-RECORD_SECONDS_LOGIN = 5
-SIMILARITY_THRESHOLD = 0.6
-PROFILES_DIR = "profiles"
-ALPHA = 0.5
+RECORD_SECONDS_PROFILE = 10     # 프로필 생성시 녹음 시간 조절
+RECORD_SECONDS_LOGIN = 5        # 프로필 생성시 녹음 시간 조절
+SIMILARITY_THRESHOLD = 0.6      # 로그인 유사도 기준 (0.75 까지 올리는게 목표)
+PROFILES_DIR = "profiles"       # 프로필 생성시 생성되는 폴더 이름
+ALPHA = 0.5                     # Wav2Vec2 유사도 반영 정도 조절
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
 # ========== 모델 로드 ==========
@@ -72,7 +72,9 @@ def compare_with_ensemble(emb1_dir, test_audio, alpha=ALPHA):
     sim_ecapa = cosine_similarity(emb1_ecapa, emb2_ecapa)
     sim_wav = cosine_similarity(emb1_wav, emb2_wav)
     print(f"[유사도] ECAPA: {sim_ecapa:.4f}, Wav2Vec2+Pitch: {sim_wav:.4f}")
-    return alpha * sim_wav + (1 - alpha) * sim_ecapa
+    return alpha * sim_wav + (1 - alpha) * sim_ecapa    
+    # ECAPA 유사도에 Wav2Vec2+Pitch의 유사도를 일정 비율로 합쳐 유사도 반환
+    # 이부분의 수식을 변경해서 더 보안성이 높은 유사도 값을 반환할 예정
 
 # ========== PyQt5 UI ==========
 class VoiceLoginApp(QWidget):
