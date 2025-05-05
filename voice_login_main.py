@@ -7,6 +7,8 @@ import librosa
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
+import argparse
+import configparser
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
@@ -18,6 +20,9 @@ from PyQt5.QtGui import QIcon, QPixmap
 from transformers import Wav2Vec2Model, Wav2Vec2Processor
 from speechbrain.pretrained import SpeakerRecognition
 
+# from aasist.models.AASIST import Model as AASISTModel
+# from aasist.utils import load_audio, preprocess_audio
+
 # ========== 설정 ==========
 SAMPLE_RATE = 16000
 RECORD_SECONDS_PROFILE = 10     # 프로필 생성시 녹음 시간 조절
@@ -25,6 +30,7 @@ RECORD_SECONDS_LOGIN = 5        # 프로필 생성시 녹음 시간 조절
 SIMILARITY_THRESHOLD = 0.6      # 로그인 유사도 기준 (0.75 까지 올리는게 목표)
 PROFILES_DIR = "profiles"       # 프로필 생성시 생성되는 폴더 이름
 ALPHA = 0.5                     # Wav2Vec2 유사도 반영 정도 조절
+THRESHOLD = 0.5
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
 # ========== 모델 로드 ==========
@@ -32,6 +38,15 @@ ecapa_model = SpeakerRecognition.from_hparams(source="speechbrain/spkrec-ecapa-v
 wav2vec_model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base")
 wav2vec_processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base")
 wav2vec_model.eval()
+
+# AI 생성으로 만들어진 음성을 감지하는 모델
+# AASIST_model = AASISTModel()
+# AASIST_model.load_state_dict(torch.load('path_to_pretrained_model.pth'))
+# AASIST_model.eval()
+
+# VAD(Voice Activity Detection) 모델
+vad_model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', trust_repo=True)
+(get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
 
 # ========== Pitch 추출 ==========
 def extract_pitch(y, sr, target_len=512):
@@ -76,6 +91,19 @@ def compare_with_ensemble(emb1_dir, test_audio, alpha=ALPHA):
     # ECAPA 유사도에 Wav2Vec2+Pitch의 유사도를 일정 비율로 합쳐 유사도 반환
     # 이부분의 수식을 변경해서 더 보안성이 높은 유사도 값을 반환할 예정
 
+
+# def is_spoofed(audio_path):
+#     audio = load_audio(audio_path)
+#     features = preprocess_audio(audio)
+#     with torch.no_grad():
+#         output = model(features)
+#     return output.item() < THRESHOLD  # threshold는 실험을 통해 결정
+
+def is_speech_detected(audio_path):
+        wav = read_audio(audio_path, sampling_rate=SAMPLE_RATE)
+        speech_timestamps = get_speech_timestamps(wav, vad_model, sampling_rate=SAMPLE_RATE)
+        return len(speech_timestamps) > 0
+
 # ========== PyQt5 UI ==========
 class VoiceLoginApp(QWidget):
     def __init__(self):
@@ -92,6 +120,7 @@ class VoiceLoginApp(QWidget):
         self.create_buttons()
         self.load_profiles()
 
+    # 버튼 생성
     def create_buttons(self):
         btn_layout = QHBoxLayout()
 
@@ -109,6 +138,7 @@ class VoiceLoginApp(QWidget):
 
         self.layout.addLayout(btn_layout)
 
+    # 프로필 불러오기
     def load_profiles(self):
         for i in reversed(range(self.profile_buttons_layout.count())):
             widget = self.profile_buttons_layout.itemAt(i).widget()
@@ -130,16 +160,31 @@ class VoiceLoginApp(QWidget):
                     row += 1
                     col = 0
 
+    # 사용자 목소리 녹음 (로그인)
     def record_audio_login(self, path):
-        audio = sd.rec(int(SAMPLE_RATE * RECORD_SECONDS_LOGIN), samplerate=SAMPLE_RATE, channels=1, dtype='float32')
-        sd.wait()
-        sf.write(path, audio, SAMPLE_RATE)
+        while True:
+            audio = sd.rec(int(SAMPLE_RATE * RECORD_SECONDS_LOGIN), samplerate=SAMPLE_RATE, channels=1, dtype='float32')
+            sd.wait()
+            sf.write(path, audio, SAMPLE_RATE)
 
+            if is_speech_detected(path):
+                break
+            else:
+                QMessageBox.warning(self, "재녹음", "음성이 감지되지 않았습니다. 다시 녹음해주세요.")
+
+    # 사용자 목소리 녹음 (프로필생성)
     def record_audio_profile(self, path):
-        audio = sd.rec(int(SAMPLE_RATE * RECORD_SECONDS_PROFILE), samplerate=SAMPLE_RATE, channels=1, dtype='float32')
-        sd.wait()
-        sf.write(path, audio, SAMPLE_RATE)
+        while True:
+            audio = sd.rec(int(SAMPLE_RATE * RECORD_SECONDS_PROFILE), samplerate=SAMPLE_RATE, channels=1, dtype='float32')
+            sd.wait()
+            sf.write(path, audio, SAMPLE_RATE)
 
+            if is_speech_detected(path):
+                break
+            else:
+                QMessageBox.warning(self, "재녹음", "음성이 감지되지 않았습니다. 다시 녹음해주세요.")
+    
+    # 프로필 생성
     def create_profile(self):
         name, ok = QInputDialog.getText(self, "프로필 생성", "사용자 이름을 입력하세요:")
         if not ok or not name.strip():
@@ -186,7 +231,7 @@ class VoiceLoginApp(QWidget):
         QMessageBox.information(self, "완료", "🎉 프로필 생성이 완료되었습니다!")
         self.load_profiles()
 
-
+    # 2차 인증
     def second_auth(self, profile_dir):
         long_sentences = [
             "서울의 중심은 광화문입니다.",
@@ -205,6 +250,7 @@ class VoiceLoginApp(QWidget):
         else:
             QMessageBox.warning(self, "2차 인증 실패", f"❌ 유사도 부족 (2차 유사도: {score:.4f})")
 
+    # 프로필 삭제
     def delete_profile(self):
         name, ok = QInputDialog.getItem(self, "프로필 삭제", "삭제할 프로필을 선택하세요:", self.profiles, editable=False)
         if not ok or not name:
@@ -216,6 +262,7 @@ class VoiceLoginApp(QWidget):
         QMessageBox.information(self, "삭제 완료", f"{name} 프로필이 삭제되었습니다.")
         self.load_profiles()
 
+    # 프로필 선택 로그인
     def login_profile(self, name):
         profile_dir = os.path.join(PROFILES_DIR, name)
         self.record_audio_login("login.wav")
@@ -227,8 +274,12 @@ class VoiceLoginApp(QWidget):
         else:
             QMessageBox.warning(self, "로그인 실패", f"❌ 인증 실패 (유사도: {score:.4f})")
 
+    # 프로필 로그인
     def login(self):
         self.record_audio_login("login.wav")
+        # if is_spoofed("temp_login.wav"):
+        #     print("[🚨] AI 변조 음성 탐지됨! 로그인 차단.")
+        #     return
         best_match, best_score = None, 0.0
         for name in self.profiles:
             profile_dir = os.path.join(PROFILES_DIR, name)
