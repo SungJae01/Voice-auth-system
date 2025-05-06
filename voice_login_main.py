@@ -12,7 +12,8 @@ import configparser
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
-    QFileDialog, QHBoxLayout, QMessageBox, QGridLayout, QInputDialog
+    QFileDialog, QHBoxLayout, QMessageBox, QGridLayout, QInputDialog,
+    QDialog, QLabel
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap
@@ -215,9 +216,9 @@ class VoiceLoginApp(QWidget):
         ecapa_embs, wav2vec_embs = [], []
 
         for i, sentence in enumerate(long_sentences):
-            QMessageBox.information(self, f"녹음 {i+1}/5", f"📢 다음 문장을 읽어주세요:『 {sentence} 』")
             rec_path = os.path.join(path, f"record_{i+1}.wav")
-            self.record_audio_profile(rec_path)
+            dialog = RecordingDialog(sentence, self.record_audio_profile, rec_path)
+            dialog.exec_()
 
             ecapa_emb = get_ecapa_embedding(rec_path).squeeze(0)
             wav2vec_emb = get_wav2vec_pitch_embedding(rec_path).squeeze(0)
@@ -241,8 +242,8 @@ class VoiceLoginApp(QWidget):
             "나는 오늘 파이썬을 공부합니다."
         ]
         sentence = random.choice(long_sentences)
-        QMessageBox.information(self, "2차 인증", f"📢 다음 문장을 말해주세요:『 {sentence} 』")
-        self.record_audio_login("second.wav")
+        dialog = RecordingDialog(sentence, self.record_audio_login, "second.wav")
+        dialog.exec_()
         score = compare_with_ensemble(profile_dir, "second.wav", alpha=0.3)
         print(f"🔐 2차 인증 유사도: {score:.4f}")
         if score >= SIMILARITY_THRESHOLD:
@@ -294,6 +295,27 @@ class VoiceLoginApp(QWidget):
         else:
             QMessageBox.warning(self, "로그인 실패", "❌ 일치하는 프로필이 없습니다.")
 
+class RecordingDialog(QDialog):
+    def __init__(self, sentence, record_func, path):
+        super().__init__()
+        self.setWindowTitle("🎙 녹음 안내")
+        self.setFixedSize(400, 200)
+
+        self.layout = QVBoxLayout()
+        self.label = QLabel(f"📢 다음 문장을 또박또박 읽어주세요:\n\n『 {sentence} 』")
+        self.label.setWordWrap(True)
+        self.layout.addWidget(self.label)
+
+        self.record_btn = QPushButton("🎤 녹음 시작")
+        self.record_btn.clicked.connect(lambda: self.start_recording(record_func, path))
+        self.layout.addWidget(self.record_btn)
+
+        self.setLayout(self.layout)
+
+    def start_recording(self, func, path):
+        self.record_btn.setEnabled(False)
+        func(path)
+        self.accept()  # 녹음이 끝나면 다이얼로그 닫기
 # ========== 실행 ==========
 if __name__ == "__main__":
     app = QApplication(sys.argv)
