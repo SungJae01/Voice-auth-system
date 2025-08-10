@@ -131,3 +131,4 @@ https://github.com/user-attachments/assets/6a339c14-5bdc-4358-a900-dffc4742653d
 - 📱 라즈베리파이 연동
 - 🧠 GPT 기반 대화형 음성 비서 결합
 - 🔐 보안성 강화
+- 1차 인증, 2차 인증 과정 합치기 (시간 단축)
