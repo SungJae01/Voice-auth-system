@@ -1,9 +1,44 @@
+# Smart Doorlock app - requirements
+#
+# OS notes (Windows):
+# - Only FFmpeg needs a separate install. PortAudio/libsndfile are bundled in wheels.
+# - Install FFmpeg via Method 1 (winget):
+#   1) Open PowerShell as Administrator
+#   2) winget install ffmpeg
+#   3) Close & reopen the terminal, then verify: ffmpeg -version
+#
+# OS notes (Linux/macOS):
+# - You may need system packages for audio:
+#   * FFmpeg (for openai-whisper)
+#   * PortAudio (for sounddevice)
+#   * libsndfile (for soundfile)
+#   On Debian/Ubuntu: sudo apt-get install ffmpeg portaudio19-dev libsndfile1
+#   On macOS (Homebrew): brew install ffmpeg portaudio libsndfile
+#
+# PyTorch/torchaudio:
+# - CPU-only: pip install torch torchaudio
+# - NVIDIA GPU: install a wheel matching your CUDA version from https://pytorch.org/get-started/locally/
+
+# Core ML
 torch
 torchaudio
-transformers
+
+# Audio processing
+numpy
+scipy
+numba
+llvmlite
 librosa
-PyQt5
 sounddevice
 soundfile
-scipy
-numpy
+audioread
+resampy
+
+# NLP / speech models
+transformers
+sentence-transformers
+speechbrain
+openai-whisper
+
+# GUI
+PyQt5
