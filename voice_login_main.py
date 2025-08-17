@@ -1,3 +1,5 @@
+# 1차 인증(화자 식별) + 2차 인증(화자 식별 + 의미 유사도) 버전
+
 import sys
 import os
 import random
