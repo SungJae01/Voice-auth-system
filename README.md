@@ -35,7 +35,7 @@
 | ✅ 2차 인증 | 랜덤 문장을 말함으로써 인증 신뢰도 향상 |
 | 🤖 AI 음성 탐지 | 합성 음성(TTS, Deepfake)을 차단 |
 | 🧏‍♂️ **Silero VAD 기반 녹음 필터링** | 사용자 
-| 🎨 넷플릭스 스타일 UI | 직관적인 사용자 인터페이스 구현 (PyQt5)
+| ~~🎨 넷플릭스 스타일 UI~~ | ~~직관적인 사용자 인터페이스 구현 (PyQt5)~~
 
 ---
 
@@ -47,6 +47,8 @@
 - **Silero VAD** (무음 감지 및 필터링)
 - **PyQt5** (GUI)
 - **Sounddevice**, **Soundfile** (녹음/저장)
+- **whisper** (음성 텍스트 변환)
+- **sbert** (텍스트 의미 유사도 측정 `all-MiniLM-L6-v2`)
 
 ---
 
@@ -54,9 +56,10 @@
 
 ```
 📦 voice-auth-system/
- ┣ profiles/                  # 사용자 프로필 폴더
- ┣ ai_detector.py             # AI 음성 탐지기 (ResNet 기반)
- ┣ voice_login_main.py        # 메인 UI 및 기능 코드
+ ┣ profiles/                             # 사용자 프로필 폴더
+ ┣ ai_detector.py                        # AI 음성 탐지기 (ResNet 기반)
+ ┣ voice_doorlock_single_auth_ver.py     # 메인 UI 및 기능 코드 (단일 인증 과정)
+ ┣ voice_doorlock_double_auth_ver.py     # 메인 UI 및 기능 코드 (이중 인증 과정)
  ┣ ecapa_model/               # ECAPA 모델 저장 경로
  ┣ README.md                  # 프로젝트 설명
 ```
