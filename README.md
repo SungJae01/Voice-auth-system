@@ -117,7 +117,7 @@ requirements.txt 파일 읽어보기
 
 ## 📱디스플레이 화면
 
-# 1,2차 인증 과정 
+# 1,2차 인증 과정 (16s)
 
 순서도 -> [Flowchart](https://github.com/SungJae01/Voice-auth-system/blob/main/voice-first_second_auth-flowchart.mermaid)
 
@@ -128,7 +128,7 @@ https://github.com/user-attachments/assets/6a339c14-5bdc-4358-a900-dffc4742653d
 - 2차 인증 : 1차 인증으로 프로필에 있는 사용자가 식별되면 『오늘도 좋은 하루 되세요.』 라는 렌덤한 문구 제공
 - 모든 인증 과정이 완료되면 도어락 개방
 
-# 통합 인증 과정
+# 통합 인증 과정 (10s)
 
 순서도 -> [Flowchart](https://github.com/SungJae01/Voice-auth-system/blob/main/voice-auth-single-flowchart.mermaid)
 
