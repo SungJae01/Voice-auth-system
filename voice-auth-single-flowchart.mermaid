@@ -1,0 +1,50 @@
+flowchart LR
+%% ===== UI 메인 스레드 =====
+subgraph UI(Main Thread)
+A[사용자 접근 감지 버튼 클릭] --> B[애니메이션 시작 & '녹음중' 표시 & 효과음 재생]
+B --> C[RecordWorker 시작(login.wav 녹음)]
+C -- finished: ok=False --> C1[에러 음향+GIF, '음성 미감지'] --> C2[종료]
+C -- finished: ok=True --> D[process_first_auth() 실행]
+
+D --> D0{프로필 존재?}
+D0 -- No --> D01[에러 음향+GIF, '등록된 프로필 없음'] --> D02[종료]
+D0 -- Yes --> D1[각 프로필과 유사도 계산\n(ECAPA & Wav2Vec2+Pitch 앙상블)]
+D1 --> D2{최고 점수 ≥ 0.5?}
+D2 -- No --> D3[에러 음향+GIF, '등록되지 않은 음성'] --> D4[메시지 3초 뒤 클리어]
+D2 -- Yes --> D5[성공 GIF, 라벨: '1차 인증 성공: {best_match}님']
+D5 --> D6[start_second_auth(best_match)]
+D5 --> D7[NodeMCU에 PING, STATUS 전송(시도)]
+end
+
+%% ===== 2차 인증 워커 =====
+subgraph SecondAuthWorker(Background Thread)
+E[record_until_silence(second.wav)] --> E1{음성 감지?}
+E1 -- No --> E2[emit(False, '음성 미감지')]
+E1 -- Yes --> E3[Whisper STT(transcribe)]
+E3 -- 예외 --> E4[emit(False, '음성 인식 실패')]
+E3 -- 정상 --> E5[문장 의미 비교(semantic similarity)]
+E5 -- 불일치 --> E6[emit(False, '문장 의미 불일치')]
+E5 -- 일치 --> E7[화자 유사도 비교(앙상블)]
+E7 -- 예외 --> E8[emit(False, '프로필 비교 실패')]
+E7 -- 정상 --> E9{점수 ≥ 0.5?}
+E9 -- No --> E10[emit(False, '남은 시도 {attempts-1}회')]
+E9 -- Yes --> E11[emit(True, '{user}님 안녕하세요!\n도어락이 열렸습니다')]
+end
+
+%% ===== 2차 인증 결과 처리(UI) =====
+subgraph on_second_auth_finished(UI Handler)
+F[challenge_label 숨김 & 결과 GIF 표시] --> F1[status_label = message,\n버튼 활성화]
+F1 --> F2{success?}
+F2 -- No --> F3[second_attempts -= 1,\n메시지 3초 뒤 클리어] --> F4[대기/재시도 가능]
+F2 -- Yes --> F5[메시지 5초 뒤 클리어] --> F6[NodeMCU 제어 시도]
+end
+
+%% ===== NodeMCU 제어(현재 코드: UI 스레드) =====
+subgraph NodeMCU
+F6 --> N1[send_nodemcu('OPEN 7000') \n(릴레이 펄스)]
+N1 --> N2[STATUS 8회 폴링(0.4s 간격)]
+N2 -- 예외 --> N3[UI에 'NodeMCU 연결 실패' 표시 후 클리어]
+end
+
+%% ===== 최종 리셋 =====
+F6 --> R[5초 뒤 reset_to_main_scene()]
