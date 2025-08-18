@@ -145,6 +145,13 @@ https://github.com/user-attachments/assets/e9669f07-3d74-427c-9c9a-4c5a1aa7f447
   
 - 실제 렌덤 문장 의미 유사도 + 프로필 유사도 인증 과정
 
+# ⚙️ NodeMCU
+##오픈소스 사물인터넷 (IoT) 플랫폼으로 와이파이 기능이 구현된 MCU 개발보드
+
+<img width="750" height="422" alt="ESP8266-12E-NodeMCU-kit-development-board" src="https://github.com/user-attachments/assets/b7a692d2-da7a-48ef-a0cd-94914df1a5ea" />
+
+코드 [voice_doorlock_nodeMCU.ino](https://github.com/SungJae01/Voice-auth-system/blob/main/voice_doorlock_nodeMCU/voice_doorlock_nodeMCU.ino)
+
 ## 🙋‍♂️ 개발자
 
 - 👨‍💻 박성재, 심성관 | 정보통신학과 4학년
