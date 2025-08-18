@@ -76,6 +76,8 @@ pip install -r requirements.txt
 python voice_login_main.py
 ```
 
+requirements.txt 파일 읽어보기
+
 ---
 
 ## 🛡️ 보안 구조
