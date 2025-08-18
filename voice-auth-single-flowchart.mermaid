@@ -1,49 +1,62 @@
 flowchart TD
+    %% ============= 메인 인증 흐름 =============
+    A0([앱 시작]) --> A1[프로필 로드]
+    A1 --> A2[메인 화면 표시 (MainScene.gif 첫 프레임)]
+    A2 --> A3{사용자 접근 감지 버튼?}
+    A3 -->|예| A4[랜덤 문장 생성 + 안내 표시<br/>녹음중 UI(MainScene.gif 재생, '녹음중…')]
+    A4 --> A5[UnifiedAuthWorker 시작]
 
-%% ===== 1차 인증 (UI) =====
-subgraph UI["UI (Main Thread)"]
-  A["사용자 접근 감지 클릭"] --> B["애니메이션 시작<br/>'녹음중' 표시·효과음"]
-  B --> C["RecordWorker 시작 (login.wav)"]
-  C -- "ok=False" --> C1["에러 음향·GIF<br/>음성 미감지"] --> C2["종료"]
-  C -- "ok=True" --> D["process_first_auth()"]
+    %% 녹음 & VAD
+    A5 --> B1[녹음 record_until_silence<br/>(Silero VAD로 음성 구간 감지)]
+    B1 -->|무음/실패| B1F[finished(False, \"\", \"음성 미감지\") → 실패 처리]
+    B1 -->|성공| B2[recording_done 시그널]
+    B2 --> B3[UI: '녹음중…' 숨김 → Find people.gif 재생]
 
-  D --> D0{"프로필 존재?"}
-  D0 -- "No" --> D01["에러 음향·GIF<br/>프로필 없음"] --> D02["종료"]
-  D0 -- "Yes" --> D1["프로필별 유사도 계산<br/>(ECAPA + Wav2Vec2+Pitch)"]
-  D1 --> D2{"최고 점수 ≥ 0.5?"}
-  D2 -- "No" --> D3["에러 음향·GIF<br/>등록되지 않은 음성"] --> D4["메시지 3초 후 클리어"]
-  D2 -- "Yes" --> D5["성공 GIF<br/>'1차 인증 성공'"]
-  D5 --> D6["start_second_auth(best_match)"]
-  D5 --> D7["NodeMCU에 PING/STATUS 시도"]
-end
+    %% STT & 의미 유사도
+    B3 --> C1[Whisper STT (ko, beam=1, fp16 on CUDA)]
+    C1 -->|실패| C1F[finished(False, \"\", \"음성 인식 실패\") → 실패 처리]
+    C1 -->|성공| C2{SBERT 의미 유사도 ≥ 0.8?}
 
-%% ===== 2차 인증 워커 =====
-subgraph W["SecondAuthWorker (QThread)"]
-  E["second.wav 녹음"] --> E1{"음성 감지?"}
-  E1 -- "No" --> E2["emit(False, '음성 미감지')"]
-  E1 -- "Yes" --> E3["Whisper STT"]
-  E3 --> E5["문장 의미 비교 (semantic)"]
-  E5 -- "불일치" --> E6["emit(False, '문장 의미 불일치')"]
-  E5 -- "일치" --> E7["화자 유사도 비교 (앙상블)"]
-  E7 --> E9{"점수 ≥ 0.5?"}
-  E9 -- "No" --> E10["emit(False, '남은 시도 n-1회')"]
-  E9 -- "Yes" --> E11["emit(True, '{user}님 안녕하세요!<br/>도어락이 열렸습니다')"]
-end
+    %% 화자 비교 (앙상블)
+    C2 -->|예| D1[등록 프로필 반복 비교<br/>(ECAPA 임베딩 vs 입력 / Wav2Vec2+Pitch vs 입력)]
+    C2 -->|아니오| D1
+    D1 --> D2{best_score ≥ 0.6?}
+    D2 -->|예| E1{성공 조건: sem_ok && spk_ok}
+    D2 -->|아니오| E1
 
-%% ===== 2차 결과 처리 (UI) =====
-subgraph H["on_second_auth_finished (UI)"]
-  F["챌린지 라벨 숨김·결과 GIF"] --> F1["status_label = message<br/>버튼 활성화"]
-  F1 --> F2{"success?"}
-  F2 -- "No" --> F3["second_attempts -= 1<br/>메시지 3초 후 클리어"] --> F4["대기/재시도"]
-  F2 -- "Yes" --> F5["메시지 5초 후 클리어"] --> F6["NodeMCU 제어"]
-end
+    %% 성공/실패 처리
+    E1 -->|예| S1[인증 성공<br/>Success.gif 재생]
+    S1 --> S2[NodeMCUWorker 시작: \"OPEN 7000\" 전송 후<br/>STATUS 폴링(polls=8, interval=0.4s)]
+    S2 --> S3[5초 후 메인 화면 리셋<br/>시도횟수=3]
+    S2 --> N1{NodeMCU 오류?}
+    N1 -->|예| N2[상태: \"NodeMCU 연결 실패\" 표시] --> N3[상태 메시지 몇 초 후 초기화]
+    N1 -->|아니오| N3[상태 메시지 몇 초 후 초기화]
+    N3 --> A2
 
-%% ===== NodeMCU 제어 =====
-subgraph N["NodeMCU 제어"]
-  F6 --> N1["OPEN 7000 (릴레이 펄스)"]
-  N1 --> N2["STATUS 폴링 ×8 (0.4s)"]
-  N2 -- "예외" --> N3["UI에 'NodeMCU 연결 실패' 표시"]
-end
+    E1 -->|아니오| F1[인증 실패<br/>Error animation.gif 재생<br/>시도횟수 - 1]
+    F1 --> F2{남은 시도 > 0?}
+    F2 -->|예| F3[상태 메시지 몇 초 후 초기화] --> A2
+    F2 -->|아니오| L1[락다운 시작 (30초 카운트다운, QTimer)]
 
-%% 루프백
-F4 --> A
+    %% 락다운
+    L1 --> L2[1초마다 남은 시간 표시 (_tick_lockdown)]
+    L2 -->|0초| L3[락다운 해제: 시도횟수=3, 버튼 활성화] --> L4[상태 메시지 몇 초 후 초기화] --> A2
+
+    %% 실패 공통 분기
+    B1F --> F1
+    C1F --> F1
+
+    %% ============= 프로필 생성 흐름 =============
+    subgraph G[프로필 생성]
+        direction TB
+        G0[프로필 생성 버튼 클릭] --> G1{이름 입력}
+        G1 -->|중복| G2[경고: 이미 존재]
+        G1 -->|신규| G3[프로필 디렉토리 생성]
+        G3 --> G4[5개 문장 녹음 루프<br/>(RecordingDialog → record_until_silence)]
+        G4 --> G5[각 녹음에 대해<br/>ECAPA 임베딩, Wav2Vec2+Pitch 임베딩 계산]
+        G5 --> G6{다음 문장?}
+        G6 -->|예| G4
+        G6 -->|아니오| G7[평균 임베딩 저장<br/>(ecapa.pt, wav2vec.pt)]
+        G7 --> G8[완료 알림 + 프로필 목록 갱신]
+    end
+```
