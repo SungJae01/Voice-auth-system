@@ -117,7 +117,9 @@ requirements.txt 파일 읽어보기
 
 ## 📱디스플레이 화면
 
-# 1,2차 인증 과정
+# 1,2차 인증 과정 
+
+순서도 -> [Flowchart](https://github.com/SungJae01/Voice-auth-system/blob/main/voice-first_second_auth-flowchart.mermaid)
 
 https://github.com/user-attachments/assets/6a339c14-5bdc-4358-a900-dffc4742653d
 
@@ -127,6 +129,8 @@ https://github.com/user-attachments/assets/6a339c14-5bdc-4358-a900-dffc4742653d
 - 모든 인증 과정이 완료되면 도어락 개방
 
 # 통합 인증 과정
+
+순서도 -> [Flowchart](https://github.com/SungJae01/Voice-auth-system/blob/main/voice-auth-single-flowchart.mermaid)
 
 https://github.com/user-attachments/assets/e9669f07-3d74-427c-9c9a-4c5a1aa7f447
 
