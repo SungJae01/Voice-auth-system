@@ -10,6 +10,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 
+#PyQt5 라이브러리
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel,
     QMessageBox, QInputDialog, QDialog, QHBoxLayout
@@ -22,6 +23,7 @@ from speechbrain.pretrained import SpeakerRecognition
 import whisper
 from sentence_transformers import SentenceTransformer
 
+#nodeMCU WiFi 통신 라이브러리
 import socket, time, logging
 
 
@@ -30,7 +32,7 @@ SAMPLE_RATE = 16000
 RECORD_DURATION = 10
 RECORD_SECONDS_LOGIN = 10
 PROFILES_DIR = "profiles"
-SIMILARITY_THRESHOLD = 0.5
+SIMILARITY_THRESHOLD = 0.6
 ALPHA = 0.5
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
@@ -52,19 +54,22 @@ def _excepthook(exc_type, exc, tb):
 import sys as _sys
 _sys.excepthook = _excepthook
 
-# AP 모드라면 기본 IP, STA 모드라면 시리얼 모니터에 뜬 IP로 바꾸세요.
+# AP 모드라면 기본 IP, STA 모드라면 nodeMCU 시리얼 모니터에 뜬 IP로 바꾸세요.
 NODEMCU_HOST = "192.168.123.110"   # 또는 예: "192.168.0.37"
 NODEMCU_PORT = 7777
 
 # ========== 모델 불러오기 ==========
+# 화자 식별 ecapa_model 로딩
 ecapa_model = SpeakerRecognition.from_hparams(
     source="speechbrain/spkrec-ecapa-voxceleb",
     savedir="ecapa_model"
 )
+# 음성 Pitch 모델 로딩
 wav2vec_model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base")
 wav2vec_processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base")
 wav2vec_model.eval()
 
+# 텍스트 - 텍스트 의미 유사도 비교 모델 로딩
 sbert = SentenceTransformer("all-MiniLM-L6-v2")
 
 # Whisper는 MPS 말고 CPU/CUDA만 사용 (MPS에서 sparse 에러 방지)
@@ -109,6 +114,7 @@ def get_wav2vec_pitch_embedding(path):
 def cosine_similarity(a, b):
     return torch.nn.functional.cosine_similarity(a, b).mean().item()
 
+# ecapa 유사도 점수 + wav2vec_pitch 유사도 점수 (alpha값으로 가중치 조절)
 def compare_with_ensemble(emb1_dir, test_audio, alpha=ALPHA):
     try:
         emb1_ecapa = torch.load(os.path.join(emb1_dir, "ecapa.pt")).unsqueeze(0)
@@ -124,8 +130,8 @@ def compare_with_ensemble(emb1_dir, test_audio, alpha=ALPHA):
     sim_wav = cosine_similarity(emb1_wav, emb2_wav)
     return alpha * sim_wav + (1 - alpha) * sim_ecapa
 
-
-def semantic_similarity(a: str, b: str, threshold: float = 0.7) -> bool:
+# 의미 유사도를 계산하여 true, false 반환 (0.8 이상 = true)
+def semantic_similarity(a: str, b: str, threshold: float = 0.8) -> bool:
     embs = sbert.encode([a, b], convert_to_tensor=True)
     sim = torch.nn.functional.cosine_similarity(embs[0], embs[1], dim=0).item()
     print(f"[의미유사도] cos={sim:.3f}")
@@ -155,52 +161,38 @@ def send_nodemcu(cmd: str, host=NODEMCU_HOST, port=NODEMCU_PORT, timeout=1.5, re
             last_err = e
             logging.warning("send_nodemcu attempt %d/%d failed: %s", attempt, retries, e)
             time.sleep(backoff * attempt)
-    raise RuntimeError(f"NodeMCU 연결 실패: {last_err}")
+    raise RuntimeError(f"{last_err}")
 
-# 녹음 전용 워커 스레드 정의
-class RecordWorker(QThread):
-    finished = pyqtSignal(bool)   # 녹음 성공 여부를 전달
+# ───────── 통합 인증 워커 (녹음 + STT + 의미유사도 + 화자검증 + nodeMCU 전송) ─────────
+class UnifiedAuthWorker(QThread):
+    finished = pyqtSignal(bool, str, str)   # success, user(best match or ""), message
+    recording_done = pyqtSignal()           # 🔔 "녹음 종료" 알림 신호 추가
 
-    def __init__(self, path, duration):
-        super().__init__()
-        self.path = path
-        self.duration = duration
-
-    def run(self):
-        try:
-            ok = record_until_silence(self.path, self.duration)
-        except Exception as e:
-            logging.exception("RecordWorker error: %s", e)
-            ok = False
-        self.finished.emit(ok)
-
-
-# 2차 인증 전용 워커 스레드 정의
-class SecondAuthWorker(QThread):
-    finished = pyqtSignal(bool, str)
-
-    def __init__(self, user, sentence, attempts):
-        super().__init__()
-        self.user = user
-        self.expected_sentence = sentence
-        self.attempts = attempts
+    def __init__(self, expected_sentence: str, profiles: list, attempts_left: int, parent=None):
+        super().__init__(parent)
+        self.expected_sentence = expected_sentence
+        self.profiles = profiles
+        self.attempts_left = attempts_left
 
     def run(self):
         # 1) 녹음
         try:
-            ok = record_until_silence("second.wav", RECORD_SECONDS_LOGIN)
+            ok = record_until_silence("auth.wav", RECORD_SECONDS_LOGIN)
         except Exception as e:
-            logging.exception("SecondAuthWorker record error: %s", e)
-            self.finished.emit(False, "녹음 실패")
+            logging.exception("UnifiedAuthWorker record error: %s", e)
+            self.finished.emit(False, "", "녹음 실패")
             return
         if not ok:
-            self.finished.emit(False, "음성 미감지")
+            self.finished.emit(False, "", "음성 미감지")
             return
 
-        # 2) Whisper STT & 의미 비교
+        # 🔔 녹음이 "정상 종료"되면 즉시 UI에 알림 → Find people.gif로 전환
+        self.recording_done.emit()
+
+        # 2) Whisper STT
         try:
             result = whisper_model.transcribe(
-                "second.wav",
+                "auth.wav",
                 language="ko",
                 temperature=0.0,
                 beam_size=1, best_of=1,
@@ -211,25 +203,46 @@ class SecondAuthWorker(QThread):
             spoken = result["text"].strip().lower()
         except Exception as e:
             logging.exception("Whisper error: %s", e)
-            self.finished.emit(False, "음성 인식 실패")
+            self.finished.emit(False, "", "음성 인식 실패")
             return
 
-        if not semantic_similarity(self.expected_sentence.lower(), spoken):
-            self.finished.emit(False, "문장 의미 불일치")
-            return
-
-        # 3) 화자 유사도…
+        # 3) 의미 유사도
         try:
-            score = compare_with_ensemble(os.path.join(PROFILES_DIR, self.user),
-                                        "second.wav", alpha=ALPHA)
+            sem_ok = semantic_similarity(self.expected_sentence.lower(), spoken)
+        except Exception as e:
+            logging.exception("Semantic compare error: %s", e)
+            sem_ok = False
+
+        # 4) 화자 유사도(등록 프로필 중 최고값)
+        best_match, best_score = None, -1e9
+        try:
+            for p in self.profiles:
+                profile_dir = os.path.join(PROFILES_DIR, p)
+                score = compare_with_ensemble(profile_dir, "auth.wav", alpha=ALPHA)
+                print(f"[유사도] {p}: {score:.4f}")
+                if score > best_score:
+                    best_score = score
+                    best_match = p
+            spk_ok = (best_score >= SIMILARITY_THRESHOLD)
         except Exception as e:
             logging.exception("Embedding compare error: %s", e)
-            self.finished.emit(False, "프로필 비교 실패")
+            self.finished.emit(False, "", "프로필 비교 실패")
             return
-        print(f"[화자유사도] cos={score:.3f}")
-        success = score >= SIMILARITY_THRESHOLD
-        msg = f"{self.user}님 안녕하세요! 도어락이 열렸습니다" if success else f"남은 시도 {self.attempts-1}회"
-        self.finished.emit(success, msg)
+
+        success = sem_ok and spk_ok
+        if success:
+            msg = f"{best_match}님 안녕하세요! 도어락이 열렸습니다"
+            self.finished.emit(True, best_match, msg)
+        else:
+            if not sem_ok and not spk_ok:
+                reason = "문장 불일치 + 등록되지 않은 음성\n"
+            elif not sem_ok:
+                reason = "문장 의미 불일치\n"
+            else:
+                reason = "등록되지 않은 음성"
+            left = max(0, self.attempts_left - 1)
+            msg = f"인증 실패: {reason} (남은 시도 {left}회)"
+            self.finished.emit(False, best_match or "", msg)
 
 class NodeMCUWorker(QThread):
     error = pyqtSignal(str)
@@ -254,7 +267,6 @@ class NodeMCUWorker(QThread):
                 time.sleep(self.interval)
         except Exception as e:
             self.error.emit(str(e))
-
 
 
 # ========== 녹음 및 VAD 함수 ==========
@@ -311,7 +323,7 @@ def record_until_silence(path,
         return False
 
 
-# ========== 녹음 안내 다이얼로그 ==========
+# ========== 프로필 생성 녹음 안내 다이얼로그 ==========
 class RecordingDialog(QDialog):
     def __init__(self, sentence, record_func, path, duration):
         super().__init__()
@@ -336,7 +348,6 @@ class RecordingDialog(QDialog):
         self.record_func(self.path, self.duration)
         self.accept()
 
-        
 
 # ========== 메인 UI ==========
 class SmartDoorlockUI(QWidget):
@@ -346,9 +357,9 @@ class SmartDoorlockUI(QWidget):
         self.setGeometry(1800, 0, 500, 1285)    # 실제 소형 LCD 화면 비율과 유사하게
         self.setStyleSheet("background-color: white;")
         self.auth_fail_count = 0    # 실패 횟수 초기화
-        self.second_attempts = 3    # 2차 인증 총 시도 횟수
+        self.attempts_left = 3      # 통합 인증 총 시도 횟수
 
-        # ── 메인 레이아웃 (한 번만!) ──
+        # ── 메인 레이아웃 ──
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(0,0,0,0)
 
@@ -357,14 +368,13 @@ class SmartDoorlockUI(QWidget):
         self.label.setFixedSize(500, 500)
         self.label.setAlignment(Qt.AlignCenter)
         self.movie = QMovie("gif/MainScene.gif")
-        self.movie.setScaledSize(QSize(250, 250))
         self.label.setFixedHeight(500)
         # 최초엔 재생하지 않고 첫 프레임만
         self.movie.jumpToFrame(0)
         self.label.setPixmap(self.movie.currentPixmap())
         main_lay.addWidget(self.label)
 
-        # ── 2차 인증 문장 표시용 레이블 ──
+        # ── 통합 인증 문장 표시용 레이블 ──
         self.challenge_label = QLabel("", self)
         self.challenge_label.setAlignment(Qt.AlignCenter)
         self.challenge_label.setStyleSheet("color: #bbbbbf; font-size: 23px;")
@@ -426,7 +436,13 @@ class SmartDoorlockUI(QWidget):
 
         self.profiles = []
         self.load_profiles()
-        
+
+        self.lockdown_timer = QTimer(self)
+        self.lockdown_timer.setInterval(1000)  # 1초
+        self.lockdown_timer.timeout.connect(self._tick_lockdown)
+        self.lockdown_remaining = 0
+
+    # 프로필 생성 (ecapa 임베딩 파일, wav2vec 임베딩 파일, 음성 녹음본 5개 생성하여 프로필에 저장)
     def create_profile(self):
         name, ok = QInputDialog.getText(self, "프로필 생성", "사용자 이름을 입력하세요:")
         if not ok or not name.strip():
@@ -475,10 +491,19 @@ class SmartDoorlockUI(QWidget):
             logging.exception("load_profiles error: %s", e)
             self.profiles = []
 
-    def clear_status(self, delay=3000):
+    def on_recording_done(self):
+        """녹음 종료 직후: '녹음중…' 감추고 Find people.gif로 전환"""
+        self.recording_label.hide()
+        self.movie = QMovie("gif/Find people.gif")
+        self.label.setMovie(self.movie)
+        self.movie.setSpeed(75)
+        self.movie.start()
+
+    def clear_status(self, delay=4000):
         """delay(ms) 뒤에 메시지 지우기."""
         QTimer.singleShot(delay, lambda: self.status_label.setText(""))
 
+    # 사용자 감지 (도어락 인증 과정 시작)
     def on_user_detected(self):
         # 1) MP3 재생 ──
         mp3_path = os.path.abspath("mp3/Apple Intelligence Sound Effect.mp3")  # 재생할 파일 경로
@@ -487,175 +512,126 @@ class SmartDoorlockUI(QWidget):
         self.player.setMedia(media)
         self.player.play()
 
-        # 2) 사용자 접근 감지 → 애니메이션 재생 + 녹음중 텍스트 보이기
-        self.label.setMovie(self.movie)
-        self.movie.start()
-        self.recording_label.setText("녹음중…")
-        self.recording_label.show()
-        self.detect_btn.setEnabled(False)
-
-        # 3) 워커 스레드로 녹음 시작
-        self.recorder = RecordWorker("login.wav", RECORD_SECONDS_LOGIN)
-        self.recorder.finished.connect(self.on_record_finished)
-        self.recorder.start()
-
-    def on_record_finished(self, ok: bool):
-        # 이 슬롯은 메인 스레드에서 실행됩니다.
-        self.movie.stop()
-        self.recording_label.hide()
-        self.detect_btn.setEnabled(True)
-
-        if not ok:
-            # 오류 MP3 재생
-            mp3_path = os.path.abspath("mp3/Mac Error Sound Effect.mp3")  # 재생할 파일 경로
-            url = QUrl.fromLocalFile(mp3_path)
-            media = QMediaContent(url)
-            self.player.setMedia(media)
-            self.player.play()
-
-            # 오류용 GIF 교체
-            error_movie = QMovie("gif/Error animation.gif")
-            self.label.setMovie(error_movie)
-            error_movie.setSpeed(75)  # 기본 속도의 75% → 절반 속도로 재생
-            error_movie.start()
-
-            self.status_label.setText("실패: 음성이 감지되지 않았습니다.")
-            self.clear_status()
-            return
-
-        # 녹음이 성공했으니 1차 인증 로직 실행
-        self.process_first_auth()
-
-    def process_first_auth(self):
-        if not self.profiles:
-            # 오류 MP3 재생
-            mp3_path = os.path.abspath("mp3/Mac Error Sound Effect.mp3")  # 재생할 파일 경로
-            url = QUrl.fromLocalFile(mp3_path)
-            media = QMediaContent(url)
-            self.player.setMedia(media)
-            self.player.play()
-
-            # 오류용 GIF 교체
-            error_movie = QMovie("gif/Error animation.gif")
-            self.label.setMovie(error_movie)
-            error_movie.setSpeed(75)  # 기본 속도의 75% → 절반 속도로 재생
-            error_movie.start()
-
-            self.status_label.setText("오류: 등록된 프로필이 없습니다.")
-            self.clear_status()
-            return
-
-        # 녹음 끝났으니 “녹음중” 텍스트 숨기고 완료 애니메이션으로 교체
-        self.movie.stop()
-
-        best_match, best_score = None, 0.0
-
-        print("1차 인증 결과")
-        for p in self.profiles:
-            profile_dir = os.path.join(PROFILES_DIR, p)
-            combined = compare_with_ensemble(profile_dir, "login.wav")
-            print(f"[유사도] {p}: {combined:.4f}")
-
-            if combined > best_score:
-                best_score = combined
-                best_match = p
-
-        if best_score >= SIMILARITY_THRESHOLD:
-            success_movie = QMovie("gif/Success.gif")
-            self.label.setMovie(success_movie)
-            success_movie.setSpeed(75)
-            success_movie.start()
-            self.status_label.setText(f"1차 인증 성공: {best_match}님, 안녕하세요!")
-            self.start_second_auth(best_match)
-            try:
-                send_nodemcu("PING")
-                send_nodemcu("STATUS")
-            except Exception as e:
-                self.status_label.setText(f"NodeMCU 연결 실패: {e}")
-                self.clear_status()
-        else:
-            # 오류 MP3 재생
-            mp3_path = os.path.abspath("mp3/Mac Error Sound Effect.mp3")  # 재생할 파일 경로
-            url = QUrl.fromLocalFile(mp3_path)
-            media = QMediaContent(url)
-            self.player.setMedia(media)
-            self.player.play()
-
-            # 오류용 GIF 교체
-            error_movie = QMovie("gif/Error animation.gif")
-            self.label.setMovie(error_movie)
-            error_movie.setSpeed(75)
-            error_movie.start()
-
-            self.status_label.setText("인증 실패: 등록되지 않은 음성입니다.")
-        self.clear_status()
-
-    def start_second_auth(self, user):
-        # 1) 랜덤 문장 선택
+        # 2) 랜덤 문장 준비 (이미 있다면 생략)
         sentence = random.choice([
             "서울의 중심은 광화문입니다.",
             "오늘도 좋은 하루 되세요.",
             "봄에는 꽃이 피고 새가 날아요."
         ])
-        # 2) 화면에 보여주기
-        self.challenge_label.setText(f"2차 인증\n\n「{sentence}」")
-        self.challenge_label.show()
+        self.current_sentence = sentence
 
-        # 3) 애니메이션 재생
-        auth_movie = QMovie("gif/Find people.gif")
-        self.label.setMovie(auth_movie)
-        auth_movie.setSpeed(75)
-        auth_movie.start()
+        # ✅ 문장 라벨에 표시 + 보이기
+        self.challenge_label.setText(f"아래 문장을 읽어주세요!\n\n「{self.current_sentence}」")
+        self.challenge_label.show() 
 
-        # 4) 버튼 잠금
+        # 3) 녹음 "중"에는 MainScene.gif 재생
+        self.movie = QMovie("gif/MainScene.gif")
+        self.label.setMovie(self.movie)
+        self.movie.setSpeed(75)
+        self.movie.start()
+        self.recording_label.setText("녹음중…")
+        self.recording_label.show()
         self.detect_btn.setEnabled(False)
 
-        # 5) 워커에 sentence도 넘기기
-        self.second_worker = SecondAuthWorker(
-            user=user,
-            sentence=sentence,
-            attempts=self.second_attempts
+        # 4) 통합 인증 워커 시작 + 신호 연결
+        self.auth_worker = UnifiedAuthWorker(
+            expected_sentence=self.current_sentence,
+            profiles=self.profiles,
+            attempts_left=self.attempts_left  # 또는 self.attempts_left
         )
-        self.second_worker.finished.connect(self.on_second_auth_finished)
-        self.second_worker.start()
+        self.auth_worker.recording_done.connect(self.on_recording_done)  # 🔗 여기!
+        self.auth_worker.finished.connect(self.on_auth_finished)  # 기존 완료 슬롯
+        self.auth_worker.start()
 
-    def on_second_auth_finished(self, success, message):
-        # 챌린지 문장 숨기기
+    # 인증 과정 종료 시점
+    def on_auth_finished(self, success: bool, user: str, message: str):
+        # 문장 숨김 & 녹음중 숨김
         self.challenge_label.hide()
-        # 기존 성공/실패 처리…
-        movie = QMovie("gif/Success.gif" if success else "gif/Error animation.gif")
-        self.label.setMovie(movie)
-        movie.start()
+        self.recording_label.hide()
+
+        # 결과 애니메이션 + 사운드
+        if success:
+            movie = QMovie("gif/Success.gif")
+            self.label.setMovie(movie)
+            movie.setSpeed(75)
+            movie.start()
+            # 성공 시 NodeMCU 제어(백그라운드)
+            self.nodemcu_worker = NodeMCUWorker(open_ms=7000, polls=8, interval=0.4)
+            self.nodemcu_worker.error.connect(self._on_nodemcu_error)
+            self.nodemcu_worker.start()
+            # 5초 후 메인 화면으로 리셋
+            QTimer.singleShot(5000, self.reset_to_main_scene)
+            self.attempts_left = 3  # 성공 시 시도횟수 리셋
+        else:
+            # 오류 사운드
+            mp3_path = os.path.abspath("mp3/Mac Error Sound Effect.mp3")
+            url = QUrl.fromLocalFile(mp3_path)
+            media = QMediaContent(url)
+            self.player.setMedia(media)
+            self.player.play()
+
+            movie = QMovie("gif/Error animation.gif")
+            self.label.setMovie(movie)
+            movie.setSpeed(75)
+            movie.start()
+
+            # 시도 횟수 감소
+            self.attempts_left = max(0, self.attempts_left - 1)
+
         self.status_label.setText(message)
-        self.detect_btn.setEnabled(True)
-        if not success:
+        self.detect_btn.setEnabled(True if self.attempts_left > 0 or success else False)
+
+        if not success and self.attempts_left == 0:
+            # 🔒 락다운 시작: 30초 카운트다운
+            self.start_lockdown(30)
+        else:
+            # 락다운이 아니면 기존처럼 몇 초 후 메시지 정리
             self.clear_status()
-            self.second_attempts -= 1
-            return
-        self.clear_status(delay=5000)
-
-        # ✅ 인증 성공: NodeMCU에 개방 펄스 전송 (백그라운드 스레드)
-        self.nodemcu_worker = NodeMCUWorker(open_ms=7000, polls=8, interval=0.4)
-        self.nodemcu_worker.error.connect(self._on_nodemcu_error)
-        self.nodemcu_worker.start()
-
-        # 성공일 때만 5초 뒤에 메인 화면으로 리셋
-        QTimer.singleShot(5000, self.reset_to_main_scene)
 
     def _on_nodemcu_error(self, err: str):
         self.status_label.setText(f"NodeMCU 연결 실패: {err}")
         self.clear_status()
 
+    # 모든 인증 과정 종류 후 화면 초기화
     def reset_to_main_scene(self):
         # MainScene.gif의 첫 프레임을 띄운 채 정지
         main_movie = QMovie("gif/MainScene.gif")
-        main_movie.setScaledSize(QSize(250, 250))
         main_movie.jumpToFrame(0)
         # QMovie객체가 아닌 현재 프레임만 표시하려면 setPixmap
         self.label.setPixmap(main_movie.currentPixmap())
         # 다음번 재생을 위해 self.movie에도 저장
         self.movie = main_movie
 
+    # 인증 3회 실패 시 락다운
+    def start_lockdown(self, seconds=30):
+        """락다운 시작: seconds 동안 카운트다운 표시"""
+        self.lockdown_remaining = int(seconds)
+        self.detect_btn.setEnabled(False)
+        # 안내 문장 숨김(있다면)
+        self.challenge_label.hide()
+        # 즉시 1회 갱신
+        self.status_label.setText(f"연속 실패로 잠시 후 다시 시도하세요 \n\n({self.lockdown_remaining}초)")
+        # 1초 주기 카운트다운 시작
+        self.lockdown_timer.start()
+
+    def _tick_lockdown(self):
+        """1초마다 호출되어 남은 시간 갱신"""
+        self.lockdown_remaining -= 1
+        if self.lockdown_remaining > 0:
+            self.status_label.setText(f"연속 실패로 잠시 후 다시 시도하세요 \n\n({self.lockdown_remaining}초)")
+        else:
+            self.lockdown_timer.stop()
+            self._unlock_after_lockdown()
+
+    def _unlock_after_lockdown(self):
+        """락다운 해제: 버튼 활성화 및 메시지 정리"""
+        # 혹시라도 남아있으면 정지
+        if self.lockdown_timer.isActive():
+            self.lockdown_timer.stop()
+        self.attempts_left = 3
+        self.status_label.setText("다시 시도할 수 있습니다.")
+        self.detect_btn.setEnabled(True)
+        self.clear_status()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
