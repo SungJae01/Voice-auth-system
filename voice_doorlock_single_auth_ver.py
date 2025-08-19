@@ -174,6 +174,16 @@ class UnifiedAuthWorker(QThread):
         self.profiles = profiles
         self.attempts_left = attempts_left
 
+    # 모든 인증 과정 종류 후 화면 초기화
+    def reset_to_main_scene(self):
+        # MainScene.gif의 첫 프레임을 띄운 채 정지
+        main_movie = QMovie("gif/MainScene.gif")
+        main_movie.jumpToFrame(0)
+        # QMovie객체가 아닌 현재 프레임만 표시하려면 setPixmap
+        self.label.setPixmap(main_movie.currentPixmap())
+        # 다음번 재생을 위해 self.movie에도 저장
+        self.movie = main_movie
+
     def run(self):
         # 1) 녹음
         try:
@@ -581,6 +591,15 @@ class SmartDoorlockUI(QWidget):
         self.status_label.setText(message)
         self.detect_btn.setEnabled(True if self.attempts_left > 0 or success else False)
 
+        # ▷ 음성 미감지: 에러 GIF 재생 후 3초 뒤 메인 화면으로 복귀
+        if "음성 미감지" in message:
+            QTimer.singleShot(3000, self.reset_to_main_scene)
+            if self.attempts_left > 0:
+                # 락다운이 아닐 때는 메시지도 3초 뒤 지우고 종료
+                self.clear_status(delay=3000)
+                self.detect_btn.setEnabled(True)
+                return  # 아래 락다운 분기/기본 clear_status는 건너뜁니다
+            
         if not success and self.attempts_left == 0:
             # 🔒 락다운 시작: 30초 카운트다운
             self.start_lockdown(30)
@@ -629,6 +648,7 @@ class SmartDoorlockUI(QWidget):
         if self.lockdown_timer.isActive():
             self.lockdown_timer.stop()
         self.attempts_left = 3
+        self.reset_to_main_scene()
         self.status_label.setText("다시 시도할 수 있습니다.")
         self.detect_btn.setEnabled(True)
         self.clear_status()
