@@ -1,0 +1,32 @@
+sequenceDiagram
+  participant User
+  participant UI as PyQt UI
+  participant Rec as Recorder/VAD
+  participant Whisper as Whisper STT
+  participant SBERT as SBERT Check
+  participant ECAPA as ECAPA Emb
+  participant W2V as Wav2Vec2+Pitch Emb
+  participant Ens as Ensemble
+  participant ESP as ESP8266
+  participant Relay as Relay D1
+
+  User->>UI: 접근 감지(버튼/UDP)
+  UI->>Rec: 녹음 시작
+  Rec-->>UI: auth.wav 완료
+  UI->>Whisper: 음성 → 텍스트
+  Whisper-->>UI: 인식 텍스트
+  UI->>SBERT: 문장 의미 유사도
+  UI->>ECAPA: 임베딩(auth.wav)
+  UI->>W2V: 임베딩(auth.wav)
+  ECAPA-->>Ens: 화자 유사도(ECAPA)
+  W2V-->>Ens: 화자 유사도(W2V+Pitch)
+  SBERT-->>Ens: 의미검증 결과
+  Ens-->>UI: 최종 판정(성공/실패)
+
+  alt 성공
+    UI->>ESP: TCP "AUTHOK" (= SEQ 1000 5000 1000)
+    ESP->>Relay: ON 1s → OFF 5s → ON 1s → OFF
+    ESP-->>UI: STATUS 피드백
+  else 실패
+    UI-->>User: 실패 메시지/락다운
+  end
