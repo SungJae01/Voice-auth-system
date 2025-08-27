@@ -152,6 +152,10 @@ https://github.com/user-attachments/assets/e9669f07-3d74-427c-9c9a-4c5a1aa7f447
 
 코드 [voice_doorlock_nodeMCU.ino](https://github.com/SungJae01/Voice-auth-system/blob/main/voice_doorlock_nodeMCU/voice_doorlock_nodeMCU.ino)
 
+# 시연 영상
+
+https://github.com/user-attachments/assets/0bf58e9b-a54f-4728-800c-5bf2837369c7
+
 ## 🙋‍♂️ 개발자
 
 - 👨‍💻 박성재, 심성관 | 정보통신학과 4학년
