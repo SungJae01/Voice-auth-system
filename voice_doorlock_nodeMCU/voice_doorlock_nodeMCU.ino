@@ -1,31 +1,54 @@
-// WiFi를 사용하여 노트북에서 실행한 Python 코드와 통신
-// 인증 과정이 모두 완료되면 7초 동안 도어락 개방 후 자동으로 닫힘
+// ESP8266 Doorlock - Minimal (AP 모드 + TCP 제어 + 릴레이 + SEQ 상태머신)
+// 파이썬에서 "AUTHOK" 또는 "SEQ on1 gap on2" 한 줄만 보냄.
 
 #include <ESP8266WiFi.h>
 
-// ── 네트워크: 옵션 A (파이썬은 TCP로 명령 / USB 시리얼은 모니터 전용) ──
-#define USE_AP_MODE 0              // 1: SoftAP, 0: STA(공유기 접속)
+// ── 네트워크 ──
+#define USE_AP_MODE 1              // 1: SoftAP, 0: STA(공유기 접속)
 #if USE_AP_MODE
 const char* ap_ssid = "DoorlockAP";
 const char* ap_pass = "12345678";  // 8자 이상
 #else
-const char* sta_ssid = "WIFI_SSID";
-const char* sta_pass = "PASSWORD";
+const char* sta_ssid = "";
+const char* sta_pass = "";
 #endif
 WiFiServer server(7777);
 
 // ── 릴레이 핀/논리 설정 ──
-#define RELAY_PIN D1               // GPIO5 (권장) D1 핀으로 릴레이를 제어하여 도어락을 열고 닫음
-#define RELAY_ACTIVE_LOW 1         // 대부분 릴레이 모듈은 'LOW일 때 ON' 
-#define MIRROR_LED 1               // 보드 LED(D4, active-low)로 상태 미러 (디버깅용)
+#define RELAY_PIN D1               // GPIO5 → 릴레이 IN
+#define RELAY_ACTIVE_LOW 1         // 대부분 릴레이 모듈은 'LOW일 때 ON'
 
-// ── 펄스 타이머 상태 ──
+// ── 상태 미러용 LED (D6, Active-High) ──
+#define MIRROR_LED 1
+#define MIRROR_LED_PIN D6
+#define MIRROR_LED_ACTIVE_HIGH 1   // HIGH=켜짐
+
+// ── OPEN(단일 펄스) 상태 ──
 bool relayOn = false;
 bool pulseInProgress = false;
 unsigned long pulseEndAt = 0;
 
+// ── SEQ 상태머신 ──
+bool seqActive = false;
+uint8_t seqPhase = 0;              // 0=idle, 1=on1, 2=gap(off), 3=on2
+unsigned long seqPhaseEndAt = 0;
+int seqOn1 = 0, seqGap = 0, seqOn2 = 0;
+const int SEQ_MIN_MS = 10;
+const int SEQ_MAX_MS = 20000;
+
 // ── 유틸 ──
 void logln(const String& s) { Serial.println(s); }
+
+void setMirrorLed(bool on) {
+#if MIRROR_LED
+  pinMode(MIRROR_LED_PIN, OUTPUT);
+#if MIRROR_LED_ACTIVE_HIGH
+  digitalWrite(MIRROR_LED_PIN, on ? HIGH : LOW);
+#else
+  digitalWrite(MIRROR_LED_PIN, on ? LOW : HIGH);
+#endif
+#endif
+}
 
 void setRelay(bool on) {
   relayOn = on;
@@ -34,16 +57,10 @@ void setRelay(bool on) {
 #else
   digitalWrite(RELAY_PIN, on ? HIGH : LOW);
 #endif
-#if MIRROR_LED
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, on ? LOW : HIGH); // 보드 LED는 active-low
-#endif
+  setMirrorLed(on);
 }
 
-int relayStateForReport() {
-  // 논리에 상관없이 "현재 에너지 인가 여부"를 1/0으로 리턴
-  return relayOn ? 1 : 0;
-}
+int relayStateForReport() { return relayOn ? 1 : 0; }
 
 String readLineFromClient(WiFiClient& c) {
   static String buf;
@@ -67,53 +84,103 @@ String readLineFromSerial() {
   return String();
 }
 
-void replyBoth(WiFiClient* pc, const String& s) {
+void reply(WiFiClient* pc, const String& s) {
   if (pc && pc->connected()) pc->println(s);
-  logln(s); // 항상 시리얼 모니터에도 출력
+  logln(s);
 }
 
+// ── SEQ 취소 ──
+void cancelSeqIfRunning() {
+  if (seqActive) {
+    seqActive = false;
+    seqPhase = 0;
+    setRelay(false);
+    logln("SEQ CANCELED");
+  }
+}
+
+// ── SEQ 시작 ──
+void startSeq(int on1, int gap, int on2, WiFiClient* pc) {
+  on1 = constrain(on1, SEQ_MIN_MS, SEQ_MAX_MS);
+  gap = constrain(gap, SEQ_MIN_MS, SEQ_MAX_MS);
+  on2 = constrain(on2, SEQ_MIN_MS, SEQ_MAX_MS);
+
+  // 다른 동작 취소
+  pulseInProgress = false;
+  cancelSeqIfRunning();
+
+  seqOn1 = on1; seqGap = gap; seqOn2 = on2;
+  seqActive = true; seqPhase = 1;
+  setRelay(true);
+  seqPhaseEndAt = millis() + (unsigned long)seqOn1;
+
+  reply(pc, "OK SEQ " + String(seqOn1) + " " + String(seqGap) + " " + String(seqOn2));
+  reply(pc, "STATUS " + String(relayStateForReport()));
+}
+
+// ── 명령 처리 ──
 void processCommand(const String& raw, WiFiClient* pc) {
   String line = raw; line.trim(); line.toUpperCase();
 
   if (line == "PING") {
-    replyBoth(pc, "PONG");
+    reply(pc, "PONG");
   }
-  else if (line.startsWith("OPEN")) {
-    // 형식: OPEN 700  (700ms 펄스)
+  else if (line.startsWith("OPEN")) {  // OPEN [ms]
+    cancelSeqIfRunning();
     int ms = 500;
     int sp = line.indexOf(' ');
-    if (sp > 0) {
-      int v = line.substring(sp + 1).toInt();
-      if (v > 0) ms = v;
-    }
-    const int MIN_PULSE_MS = 50;     // 너무 짧은 펄스 보호
-    const int MAX_PULSE_MS = 10000;   // 과도 펄스 보호
+    if (sp > 0) { int v = line.substring(sp + 1).toInt(); if (v > 0) ms = v; }
+    const int MIN_PULSE_MS = 50, MAX_PULSE_MS = 10000;
     ms = constrain(ms, MIN_PULSE_MS, MAX_PULSE_MS);
 
     setRelay(true);
     pulseInProgress = true;
     pulseEndAt = millis() + (unsigned long)ms;
 
-    replyBoth(pc, "OK OPEN " + String(ms));
-    replyBoth(pc, "STATUS " + String(relayStateForReport())); // 즉시 상태도 한번 찍기
+    reply(pc, "OK OPEN " + String(ms));
+    reply(pc, "STATUS " + String(relayStateForReport()));
   }
   else if (line == "CLOSE") {
+    cancelSeqIfRunning();
     setRelay(false);
     pulseInProgress = false;
-    replyBoth(pc, "OK CLOSE");
-    replyBoth(pc, "STATUS " + String(relayStateForReport()));
+    reply(pc, "OK CLOSE");
+    reply(pc, "STATUS " + String(relayStateForReport()));
   }
   else if (line == "STATUS") {
-    replyBoth(pc, "STATUS " + String(relayStateForReport()));
+    reply(pc, "STATUS " + String(relayStateForReport()));
+  }
+  else if (line.startsWith("SEQ")) {   // SEQ on1 gap on2
+    int on1 = 1000, gap = 5000, on2 = 1000;   // 기본값
+    int p1 = line.indexOf(' ');
+    if (p1 > 0) {
+      String rest = line.substring(p1 + 1);
+      int p2 = rest.indexOf(' ');
+      int p3 = (p2 > 0) ? rest.indexOf(' ', p2 + 1) : -1;
+      if (p2 > 0 && p3 > 0) {
+        on1 = rest.substring(0, p2).toInt();
+        gap = rest.substring(p2 + 1, p3).toInt();
+        on2 = rest.substring(p3 + 1).toInt();
+      }
+    }
+    startSeq(on1, gap, on2, pc);
+  }
+  else if (line == "AUTHOK") {        // 편의: 1초 ON → 5초 OFF → 1초 ON
+    startSeq(1000, 5000, 1000, pc);
   }
   else {
-    replyBoth(pc, "ERR UNKNOWN: " + line);
+    reply(pc, "ERR UNKNOWN: " + line);
   }
 }
 
 void setup() {
   pinMode(RELAY_PIN, OUTPUT);
-  setRelay(false);                  // 초기 OFF
+  setRelay(false);
+#if MIRROR_LED
+  pinMode(MIRROR_LED_PIN, OUTPUT);
+  setMirrorLed(false);
+#endif
+
   Serial.begin(115200);
   delay(200);
 
@@ -121,7 +188,7 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ap_ssid, ap_pass);
   IPAddress ip = WiFi.softAPIP();
-  logln("READY AP " + ip.toString());          // 예: 192.168.4.1
+  logln("READY AP " + ip.toString());   // 보통 192.168.4.1
 #else
   WiFi.mode(WIFI_STA);
   WiFi.begin(sta_ssid, sta_pass);
@@ -137,15 +204,40 @@ void setup() {
 }
 
 void loop() {
-  // ── 1) 펄스 종료 처리 (논블로킹) ──
-  if (pulseInProgress && (long)(millis() - pulseEndAt) >= 0) {
+  unsigned long now = millis();
+
+  // ── OPEN(단일 펄스) 종료 ──
+  if (pulseInProgress && (long)(now - pulseEndAt) >= 0) {
     setRelay(false);
     pulseInProgress = false;
     logln("PULSE DONE");
     logln("STATUS " + String(relayStateForReport()));
   }
 
-  // ── 2) TCP 클라이언트 처리 ──
+  // ── SEQ 상태머신 ──
+  if (seqActive && (long)(now - seqPhaseEndAt) >= 0) {
+    if (seqPhase == 1) {                // on1 끝 → gap
+      setRelay(false);
+      seqPhase = 2;
+      seqPhaseEndAt = now + (unsigned long)seqGap;
+      logln("SEQ GAP");
+      logln("STATUS " + String(relayStateForReport()));
+    } else if (seqPhase == 2) {         // gap 끝 → on2
+      setRelay(true);
+      seqPhase = 3;
+      seqPhaseEndAt = now + (unsigned long)seqOn2;
+      logln("SEQ ON2");
+      logln("STATUS " + String(relayStateForReport()));
+    } else if (seqPhase == 3) {         // on2 끝 → 종료
+      setRelay(false);
+      seqActive = false;
+      seqPhase = 0;
+      logln("SEQ DONE");
+      logln("STATUS " + String(relayStateForReport()));
+    }
+  }
+
+  // ── TCP 클라이언트 처리 ──
   static WiFiClient client;
   if (!client || !client.connected()) {
     client = server.available();
@@ -159,12 +251,9 @@ void loop() {
     }
   }
 
-  // ── 3) (선택) 시리얼 모니터에서 직접 명령 입력해도 동일 동작 ──
+  // (옵션) 시리얼로도 테스트 가능
   String scmd = readLineFromSerial();
-  if (scmd.length() > 0) {
-    // 시리얼로 들어온 명령은 네트워크 응답 없이 로그만(=시리얼 모니터) 출력
-    processCommand(scmd, nullptr);
-  }
+  if (scmd.length() > 0) processCommand(scmd, nullptr);
 
-  yield(); // 와이파이 유지
+  yield(); // WiFi 유지
 }
