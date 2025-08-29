@@ -141,7 +141,8 @@ https://github.com/user-attachments/assets/e9669f07-3d74-427c-9c9a-4c5a1aa7f447
 - 3회 실패시 30초 동안 인증 불가
   
 # 유사도 측정 과정
-  <img width="1429" height="302" alt="image" src="https://github.com/user-attachments/assets/d8a83162-3ab0-46a3-9be1-735fd50f228a" />
+  <img width="879" height="261" alt="image" src="https://github.com/user-attachments/assets/c648c1e0-15aa-4789-b1e9-a40c2c30eca0" />
+
   
 - 실제 렌덤 문장 의미 유사도 + 프로필 유사도 인증 과정
 
