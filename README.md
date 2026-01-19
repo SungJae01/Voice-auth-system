@@ -23,6 +23,18 @@
 이 프로젝트는 사용자의 **고유한 음성 특징**을 바탕으로 스마트 도어락, 홈 IoT 등의 보안 시스템에 응용 가능한 **음성 기반 인증 시스템**입니다.  
 **ECAPA-TDNN**과 **Wav2Vec2 + Pitch 임베딩**을 앙상블하여 **높은 정확도와 강건성**을 확보하고, **Silero VAD**를 통해 **무음/잡음 필터링** 기능을 추가해 **신뢰도 높은 음성 수집**을 실현했습니다.
 
+<img width="1641" height="924" alt="image" src="https://github.com/user-attachments/assets/5ef97e40-a9a5-4f04-bf00-e2f5cc9dbc2f" />
+
+<img width="1641" height="924" alt="image" src="https://github.com/user-attachments/assets/3b52af51-19fa-4557-b53a-cb534494fbad" />
+
+<img width="1640" height="924" alt="image" src="https://github.com/user-attachments/assets/1821e69f-c76e-4d94-85a9-b2d1fe9f1130" />
+
+<img width="1640" height="924" alt="image" src="https://github.com/user-attachments/assets/bd421124-e39f-4437-b704-85fe670bb7ef" />
+
+<img width="1640" height="924" alt="image" src="https://github.com/user-attachments/assets/f3185ad2-ed39-451f-8c5f-a9d4c74fc272" />
+
+<img width="1640" height="924" alt="image" src="https://github.com/user-attachments/assets/600371a0-ee11-44ca-9cc7-04046fc27451" />
+
 ---
 
 ## ✨ 주요 기능
@@ -84,7 +96,7 @@ requirements.txt 파일 읽어보기
 
 1. **1차 인증**: 등록된 음성과 새로 녹음한 음성 비교
 2. **2차 인증**: 무작위 문장 발화 후 유사도 재검사
-3. **AI 탐지**: 기계적으로 합성된 음성 탐지 및 차단
+3. ~~**AI 탐지**: 기계적으로 합성된 음성 탐지 및 차단~~
 4. **음성 검증(VAD)**: 무성 음성(무음, 잡음 등) 필터링 → 유효한 음성만 프로필 생성에 사용
 5. **임베딩 데이터 업데이트** : 로그인시 사용된 음성 파일을 개인 프로필 임베딩 값에 업데이트하여 매번 인증이 보안을 강화
 
@@ -108,7 +120,7 @@ requirements.txt 파일 읽어보기
 - 🔸 Wav2Vec2 + Pitch 임베딩 추가 (앙상블 구조 적용)
 - 🔸 긴 문장 5개 녹음 → 평균 임베딩 저장
 - 🔸 디스플레이 UI 구성
-- 🔸 2차 인증 및 AI 합성 음성 차단 기능 (개발중...)
+- 🔸 ~~2차 인증 및 AI 합성 음성 차단 기능~~
 - 🔸 Silero VAD 적용으로 유효 음성 자동 검출 기능 추가
 - 🔸 sbert 모델 사용으로 렌덤 문장 의미 유사도 판단
 - 🔸 사용자의 편리성을 위해 1차, 2차 인증과정 통합 버전
@@ -128,7 +140,7 @@ https://github.com/user-attachments/assets/6a339c14-5bdc-4358-a900-dffc4742653d
 - 2차 인증 : 1차 인증으로 프로필에 있는 사용자가 식별되면 『오늘도 좋은 하루 되세요.』 등 과 같은 렌덤한 문구 제공
 - 모든 인증 과정이 완료되면 도어락 개방
 
-# 통합 인증 과정 (8s ~ 12s)
+# 통합 인증 과정 (8s ~ 10s)
 
 순서도 -> [Flowchart](https://github.com/SungJae01/Voice-auth-system/blob/main/voice-auth-single-flowchart.mermaid)
 
